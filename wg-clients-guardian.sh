@@ -8,6 +8,7 @@
 # If dump is specified, then several lines are printed; the first contains in order separated by tab:
 #    private-key, public-key, listen-port, fwmark.
 # Subsequent lines are printed for each peer and contain in order separated by tab:
+#    1           2              3         4            5                 6            7            8
 #    public-key, preshared-key, endpoint, allowed-ips, latest-handshake, transfer-rx, transfer-tx, persistent-keepalive.
 #
 
@@ -27,11 +28,55 @@ if [ ! -f "$1" ]; then
     exit 1
 fi
 
+function unitify_bytes {
+    bytes=$1
+    if [ "$bytes" -gt "1073741824" ]; then
+        echo $(( $bytes / 1073741824 )) GiB
+    elif [ "$bytes" -gt "1048576" ]; then
+        echo $(( $bytes / 1048576 )) MiB
+    elif [ "$bytes" -gt "1024" ]; then
+        echo $(( $bytes / 1024 )) KiB
+    else
+        echo $bytes B
+    fi
+}
+
+function unitify_seconds {
+    local SS=$1
+
+    if [ "$SS" -ge "60" ]; then
+        local MM=$(($SS / 60))
+        local SS=$(($SS - 60 * $MM))
+
+        if [ "$MM" -ge "60" ]; then
+            local HH=$(($MM / 60))
+            local MM=$(($MM - 60 * $HH))
+
+            if [ "$HH" -ge "24" ]; then
+                local DD=$(($HH / 24))
+                local HH=$(($HH - 24 * $DD))
+                local time_string="$DD days, $HH hours, $MM minutes and $SS seconds"
+            else
+                local time_string="$HH hours, $MM minutes and $SS seconds"
+            fi
+        else
+            local time_string="$MM minutes and $SS seconds"
+        fi
+
+    else
+        local time_string="$SS seconds"
+    fi
+
+    echo "$time_string"
+}
+
+
 # config constants
 readonly CURRENT_PATH=$(pwd)
 readonly CLIENTS_DIRECTORY="$CURRENT_PATH/clients"
 readonly WG_PATH="/usr/local/etc/wireguard/clients/"
-readonly NOW=$(date -j +%s)
+readonly NOW=$(date +%s)
+readonly DT=$(date)
 
 # after X minutes the clients will be considered disconnected
 readonly TIMEOUT=$(awk -F'=' '/^timeout=/ { print $2}' $1)
@@ -44,6 +89,8 @@ fi
 
 readonly NOTIFICATION_CHANNEL=$(awk -F'=' '/^notification_channel=/ { print $2}' $1)
 
+readonly EMAIL_TO=$(awk -F'=' '/^email_to=/ { print $2}' $1)
+
 readonly GOTIFY_HOST=$(awk -F'=' '/^gotify_host=/ { print $2}' $1)
 readonly GOTIFY_APP_TOKEN=$(awk -F'=' '/^gotify_app_token=/ { print $2}' $1)
 readonly GOTIFY_TITLE=$(awk -F'=' '/^gotify_title=/ { print $2}' $1)
@@ -55,12 +102,14 @@ while IFS= read -r LINE; do
     public_key=$(awk '{ print $1 }' <<< "$LINE")
     remote_ip=$(awk '{ print $3 }' <<< "$LINE" | awk -F':' '{print $1}')
     last_seen=$(awk '{ print $5 }' <<< "$LINE")
+    transfer_rx=$(awk '{ print $6 }' <<< "$LINE")
+    transfer_tx=$(awk '{ print $6 }' <<< "$LINE")
     client_name=$(grep -R "$public_key" $WG_PATH | awk -F"$WG_PATH|_public.key:" '{print $2}' | sed -e 's./..g')
     client_file="$CLIENTS_DIRECTORY/$client_name.txt"
 
     # create the client file if it does not exist.
     if [ ! -f "$client_file" ]; then
-        echo "offline" > $client_file
+        echo "offline}" > $client_file
     fi  
 
     # setup notification variable
@@ -106,7 +155,7 @@ while IFS= read -r LINE; do
             curl -X POST "${GOTIFY_HOST}/message" -H "accept: application/json" -H "Content-Type: application/json" -H "Authorization: Bearer ${GOTIFY_APP_TOKEN}" -d '{"message": "'"$message"'", "priority": 5, "title": "'"$GOTIFY_TITLE"'"}' > /dev/null 2>&1
         fi
         if [ "email" == "$NOTIFICATION_CHANNEL" ]; then
-            echo "$message" | mail -s "Wireguard $client_name is $send_notification" vrtareg+wireguard@gmail.com
+            echo "$message" | mail -s "Wireguard $client_name is $send_notification" ${EMAIL_TO}
         fi
     else
         printf "The client %s is %s, no notification will be sent.\n" $client_name $(cat $client_file)
@@ -115,4 +164,3 @@ while IFS= read -r LINE; do
 done <<< "$WIREGUARD_CLIENTS"
 
 exit 0
-
